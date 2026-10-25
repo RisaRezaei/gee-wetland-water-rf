@@ -10,5 +10,6 @@ authors:
 repository-code: "https://github.com/RisaRezaei/gee-wetland-water-rf"
 url: "https://risarezaei.github.io/tool.html?r=gee-wetland-water-rf"
 license: MIT
+doi: "10.5281/zenodo.23646350"
 version: 1.0.0
 date-released: "2026-10-25"

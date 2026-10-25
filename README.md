@@ -3,6 +3,7 @@
 [![Google Earth Engine](https://img.shields.io/badge/Google%20Earth%20Engine-JavaScript-34A853?logo=googleearth&logoColor=white)](https://code.earthengine.google.com)
 [![Landsat](https://img.shields.io/badge/data-Landsat%205%2F7%2F8%2F9%20C2-0B5394)](https://developers.google.com/earth-engine/datasets/catalog/landsat)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23646350.svg)](https://doi.org/10.5281/zenodo.23646350)
 
 Map **open water in lakes and wetlands** from Landsat with a **Random Forest** classifier trained on eight spectral water indices. The script checks its own accuracy on held-out samples, shows which indices mattered, and can apply the same model to other years to build a **water-area time series** back to 1984.
 
@@ -63,6 +64,12 @@ Map **open water in lakes and wetlands** from Landsat with a **Random Forest** c
 
 - Landsat Collection 2 Level-2: [`LANDSAT/LT05/C02/T1_L2`](https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_LT05_C02_T1_L2), [`LE07`](https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_LE07_C02_T1_L2), [`LC08`](https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_LC08_C02_T1_L2), [`LC09`](https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_LC09_C02_T1_L2)
 - JRC Global Surface Water yearly history: [`JRC/GSW1_4/YearlyHistory`](https://developers.google.com/earth-engine/datasets/catalog/JRC_GSW1_4_YearlyHistory) (Pekel et al., 2016)
+
+## Cite this tool
+
+Abbasalizadehrezaei, P. (2026). *Wetland Water Mapping with Random Forest* (Version 1.0.0) [Software]. Zenodo. https://doi.org/10.5281/zenodo.23646350
+
+GitHub also offers a ready-made citation under **Cite this repository** (from [CITATION.cff](CITATION.cff)).
 
 ## Author
 
