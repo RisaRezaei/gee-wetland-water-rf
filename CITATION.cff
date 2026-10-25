@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Wetland Water Mapping with Random Forest"
+abstract: "Google Earth Engine script that maps open water in lakes and wetlands from Landsat 5/7/8/9 with a Random Forest trained on eight spectral water indices, with hold-out accuracy assessment, variable importance and a multi-decade water-area time series."
+type: software
+authors:
+  - family-names: Abbasalizadehrezaei
+    given-names: Parisa
+    orcid: "https://orcid.org/0009-0009-5708-7673"
+repository-code: "https://github.com/RisaRezaei/gee-wetland-water-rf"
+url: "https://risarezaei.github.io/tool.html?r=gee-wetland-water-rf"
+license: MIT
+version: 1.0.0
+date-released: "2026-10-25"
