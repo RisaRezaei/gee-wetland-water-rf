@@ -74,7 +74,7 @@ To run the second example, set `roi: EXAMPLES.loktak`.
 |---|---|---|
 | `roi` | `EXAMPLES.urmia` | Area to classify: `EXAMPLES.urmia`, `EXAMPLES.loktak`, a drawn geometry or an asset |
 | `year` | `2025` | Year to map |
-| `season` | `['07-01', '09-30']` | Month-day window of the composite (within one calendar year) |
+| `season` | `['07-01', '09-30']` | Month-day window of the composite (within one calendar year; the script stops with a message otherwise) |
 | `maxSceneCloud` | `60` | Scenes above this cloud cover (%) are skipped |
 | `useLandsat7` | `true` | Include Landsat 7 (gaps after 2003 are filled by the median where other sensors exist) |
 | `trainingSource` | `'auto'` | `'auto'` (JRC labels) or `'drawn'` (your `water` / `land` layers) |
