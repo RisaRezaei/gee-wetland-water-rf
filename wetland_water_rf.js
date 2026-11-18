@@ -86,6 +86,12 @@ var CONFIG = {
 };
 // ==========================================================================
 
+// The composite window must lie within one calendar year (not, for example,
+// '11-01' to '02-28'); otherwise every composite would be empty.
+if (CONFIG.season[1] < CONFIG.season[0]) {
+  throw new Error('CONFIG.season must start and end in the same calendar year.');
+}
+
 var roi = CONFIG.roi;
 var NAMES = ['blue', 'green', 'red', 'nir', 'swir1', 'swir2'];
 
