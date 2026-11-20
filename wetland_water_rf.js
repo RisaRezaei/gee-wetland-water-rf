@@ -2,13 +2,15 @@
  * Wetland Water Mapping with Random Forest (Landsat 5/7/8/9)
  * ---------------------------------------------------------
  * Maps open water in a lake or wetland from a seasonal Landsat Collection 2
- * composite with a Random Forest trained on eight spectral water indices,
- * and applies the same model to other years to build a water-area series.
+ * composite with a Random Forest trained on six reflectance bands and eight
+ * spectral water indices, and applies the same model to other years to build
+ * a water-area series.
  *
  * Training data
- *   'auto'  : samples are drawn from the JRC Global Surface Water yearly
- *             history of CONFIG.trainYear (permanent water vs. not water),
- *             so the script runs anywhere without drawing points.
+ *   'auto'  : samples are labelled from the JRC Global Surface Water monthly
+ *             history of the composite's months in CONFIG.trainYears, so the
+ *             model sees Landsat 5, 7 and 8 and the hard cases (shores,
+ *             seasonal water, dry lake beds). It runs anywhere without drawing.
  *   'drawn' : draw two point/polygon layers named "water" and "land" with the
  *             geometry tools. Your own samples usually give the best map.
  *
@@ -36,7 +38,7 @@
  *   then start the exports from the Tasks tab.
  *
  * Author: Parisa Abbasalizadehrezaei · https://risarezaei.github.io
- * License: MIT · Version 1.1.0
+ * License: MIT · Version 1.2.0
  */
 
 // =============================== CONFIG ===================================
@@ -58,10 +60,11 @@ var CONFIG = {
   useLandsat7: true,             // L7 has SLC-off gaps after May 2003
 
   trainingSource: 'auto',        // 'auto' or 'drawn'
-  trainYear: 2020,               // reference year for 'auto' (1984-2021)
-  samplesPerClass: 500,
+  trainYears: [1990, 2000, 2010, 2020], // label years for 'auto' (1984-2021)
+  samplesPerClass: 1000,         // water and land points each, over all trainYears
 
-  features: ['NDVI', 'NDWI', 'MNDWI', 'AWEInsh', 'AWEIsh', 'WRI', 'NWI', 'EWI'],
+  features: ['blue', 'green', 'red', 'nir', 'swir1', 'swir2',      // reflectance
+    'NDVI', 'NDWI', 'MNDWI', 'AWEInsh', 'AWEIsh', 'WRI', 'NWI', 'EWI'], // indices
   nTrees: 100,
   trainFraction: 0.7,            // share of blocks used for training; the rest is the hold-out
   blockSize: 2000,               // block edge (m) for the split; 0 splits point by point
@@ -90,6 +93,10 @@ var CONFIG = {
 // '11-01' to '02-28'); otherwise every composite would be empty.
 if (CONFIG.season[1] < CONFIG.season[0]) {
   throw new Error('CONFIG.season must start and end in the same calendar year.');
+}
+if (CONFIG.trainingSource === 'auto' &&
+    CONFIG.trainYears.some(function (y) { return y < 1984 || y > 2021; })) {
+  throw new Error('CONFIG.trainYears must lie in 1984-2021 (the JRC monthly history).');
 }
 
 var roi = CONFIG.roi;
@@ -170,6 +177,24 @@ function composite(year) {
 }
 
 // ---- Training samples ----------------------------------------------------
+// Labels from the JRC monthly water history for the months of the composite:
+// water if the pixel was water in at least half of the months in which JRC
+// observed it. Pixels JRC never observed in those months stay unlabelled.
+// Used for the 'auto' training samples and as the reference of the map
+// accuracy assessment.
+function jrcReference(year) {
+  var m0 = parseInt(CONFIG.season[0].slice(0, 2), 10);
+  var m1 = parseInt(CONFIG.season[1].slice(0, 2), 10);
+  var months = ee.ImageCollection('JRC/GSW1_4/MonthlyHistory')
+    .filter(ee.Filter.eq('year', year))
+    .filter(ee.Filter.rangeContains('month', m0, m1))
+    .map(function (m) { return m.select('water').unmask(0); }); // 0 no data, 1 not water, 2 water
+  var waterMonths = months.map(function (m) { return m.eq(2); }).sum();
+  var seenMonths = months.map(function (m) { return m.gt(0); }).sum();
+  return waterMonths.multiply(2).gte(seenMonths).rename('reference').toByte()
+    .updateMask(seenMonths.gt(0));
+}
+
 var samples;
 if (CONFIG.trainingSource === 'drawn') {
   // Expects "water" and "land" drawn with the geometry tools.
@@ -181,16 +206,27 @@ if (CONFIG.trainingSource === 'drawn') {
     properties: ['class'], scale: 30, geometries: true, tileScale: 4
   });
 } else {
-  // JRC yearly history: 1 = not water, 2 = seasonal, 3 = permanent water.
-  var hist = ee.ImageCollection('JRC/GSW1_4/YearlyHistory')
-    .filter(ee.Filter.eq('year', CONFIG.trainYear)).first().select('waterClass');
-  var label = hist.eq(3).where(hist.eq(1), 0).updateMask(hist.eq(1).or(hist.eq(3)))
-    .rename('class').toInt();
-  samples = composite(CONFIG.trainYear).select(CONFIG.features).addBands(label)
-    .stratifiedSample({
-      numPoints: CONFIG.samplesPerClass, classBand: 'class', region: roi,
-      scale: 30, seed: CONFIG.seed, geometries: true, tileScale: 4
+  // Four strata per training year, so that the hard cases are sampled too:
+  // 1 = water that is almost always water (JRC occurrence >= 90 %),
+  // 2 = other water (shores, seasonal water),
+  // 3 = land that has been water at some time since 1984 (dry lake bed, shores),
+  // 4 = other land. Strata 1 and 2 are labelled water, 3 and 4 land.
+  var occurrence = ee.Image('JRC/GSW1_4/GlobalSurfaceWater').select('occurrence').unmask(0);
+  var perStratum = Math.round(CONFIG.samplesPerClass / 2 / CONFIG.trainYears.length);
+  samples = ee.FeatureCollection(CONFIG.trainYears.map(function (y) {
+    var ref = jrcReference(y);
+    var stratum = ee.Image(4)
+      .where(ref.eq(0).and(occurrence.gt(0)), 3)
+      .where(ref.eq(1).and(occurrence.lt(90)), 2)
+      .where(ref.eq(1).and(occurrence.gte(90)), 1)
+      .updateMask(ref.mask()).rename('stratum').toInt();
+    return composite(y).select(CONFIG.features).addBands(stratum).stratifiedSample({
+      numPoints: perStratum, classBand: 'stratum', region: roi, scale: 30,
+      seed: CONFIG.seed + y, geometries: true, tileScale: 4
+    }).map(function (f) {
+      return f.set({'class': ee.Number(f.get('stratum')).lte(2), year: y});
     });
+  })).flatten();
 }
 
 // ---- Train / hold-out split by spatial blocks ----------------------------
@@ -293,23 +329,6 @@ var ASSESS = CONFIG.assessment;
 var useJrc = !ASSESS.referencePoints && ASSESS.year <= 2021;
 var hasReference = useJrc || !!ASSESS.referencePoints;
 var assessMap = classify(composite(ASSESS.year)).rename('map');
-
-// Reference labels from the JRC monthly water history for the months of the
-// composite: water if the pixel was water in at least half of the months in
-// which JRC observed it. Pixels JRC never observed in those months are left
-// out of the sampling frame.
-function jrcReference(year) {
-  var m0 = parseInt(CONFIG.season[0].slice(0, 2), 10);
-  var m1 = parseInt(CONFIG.season[1].slice(0, 2), 10);
-  var months = ee.ImageCollection('JRC/GSW1_4/MonthlyHistory')
-    .filter(ee.Filter.eq('year', year))
-    .filter(ee.Filter.rangeContains('month', m0, m1))
-    .map(function (m) { return m.select('water').unmask(0); }); // 0 no data, 1 not water, 2 water
-  var waterMonths = months.map(function (m) { return m.eq(2); }).sum();
-  var seenMonths = months.map(function (m) { return m.gt(0); }).sum();
-  return waterMonths.multiply(2).gte(seenMonths).rename('reference').toByte()
-    .updateMask(seenMonths.gt(0));
-}
 
 var reference = useJrc ? jrcReference(ASSESS.year) : null;
 var strata = useJrc ? assessMap.updateMask(reference.mask()) : assessMap;

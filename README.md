@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23646350.svg)](https://doi.org/10.5281/zenodo.23646350)
 
-Map **open water in lakes and wetlands** from Landsat with a **Random Forest** classifier trained on eight spectral water indices. The script assesses the map with a **stratified random sample** and reports **area-adjusted accuracy and area with 95 % confidence intervals**, then applies the same model to other years to build a **water-area time series** back to 1984, with the observed area and cloud percentage of every year so that clouds are not mistaken for water loss.
+Map **open water in lakes and wetlands** from Landsat with a **Random Forest** classifier trained on six reflectance bands and eight spectral water indices. The script assesses the map with a **stratified random sample** and reports **area-adjusted accuracy and area with 95 % confidence intervals**, then applies the same model to other years to build a **water-area time series** back to 1984, with the observed area and cloud percentage of every year so that clouds are not mistaken for water loss.
 
 ![Lake Urmia open water in 1995 and 2025 with the water-area series and accuracy](docs/preview.png)
 
@@ -14,12 +14,12 @@ Map **open water in lakes and wetlands** from Landsat with a **Random Forest** c
 ## What the script does
 
 1. Builds a cloud-masked **seasonal median composite** from Landsat 5, 7, 8 and 9 Collection 2 surface reflectance.
-2. Computes eight water and vegetation indices: NDVI, NDWI, MNDWI, AWEI<sub>nsh</sub>, AWEI<sub>sh</sub>, WRI, NWI and EWI.
+2. Uses the six reflectance bands (blue, green, red, NIR, SWIR1, SWIR2) and eight water and vegetation indices: NDVI, NDWI, MNDWI, AWEI<sub>nsh</sub>, AWEI<sub>sh</sub>, WRI, NWI and EWI.
 3. Gets **training samples** in one of two ways:
-   - `'auto'`: stratified samples from the [JRC Global Surface Water](https://global-surface-water.appspot.com/) yearly history of a reference year (permanent water vs. not water). It runs anywhere with no drawing.
+   - `'auto'`: stratified samples labelled from the [JRC Global Surface Water](https://global-surface-water.appspot.com/) monthly history of the composite's months, in four training years (1990, 2000, 2010, 2020) so that the model sees Landsat 5, 7 and 8. Each year is sampled in four strata: stable water, other water (shores, seasonal water), land that has been water since 1984 (dry lake bed, shores) and other land, so the hard cases are in the training data. It runs anywhere with no drawing.
    - `'drawn'`: your own points or polygons, drawn as two layers named `water` and `land`.
 4. Splits the samples by **spatial blocks** and runs a **hold-out check** (confusion matrix, overall, producer's and user's accuracy, kappa).
-5. Charts **variable importance** for the eight indices.
+5. Charts **variable importance** for the 14 inputs.
 6. Assesses the **map** with a separate stratified random sample and reports area-weighted accuracy, an **area estimate per class**, and **quantity and allocation disagreement** (see below).
 7. Classifies the target year and, optionally, a list of years. Each year reports the **water area**, the **observed area**, the **observed share of the ROI** and the **cloud percentage** of the season; years below a coverage threshold are flagged.
 
@@ -35,7 +35,7 @@ Map **open water in lakes and wetlands** from Landsat with a **Random Forest** c
 
 The script reports two things, and they answer different questions.
 
-**1. Hold-out check (describes the model).** The training samples are split into training and hold-out sets by square blocks (`blockSize`, 2 km by default): every sample takes the random number of the block it falls in, so neighbouring samples, which look alike, stay on the same side. In `'auto'` mode the samples come only from pixels that JRC calls permanent water or never water, so they leave out the hard cases at the shoreline. This check tells you whether the model learned the classes. It does not estimate the accuracy of the map.
+**1. Hold-out check (describes the model).** The training samples are split into training and hold-out sets by square blocks (`blockSize`, 2 km by default): every sample takes the random number of the block it falls in, so neighbouring samples, which look alike, stay on the same side. The samples are drawn per stratum, not at random over the map, so this check tells you whether the model learned the classes. It does not estimate the accuracy of the map.
 
 **2. Map accuracy and area (describes the map).** Following Olofsson et al. (2014):
 
@@ -51,20 +51,35 @@ With JRC as the reference, the numbers measure **agreement with JRC Global Surfa
 
 This also works for years after 2021, which JRC does not cover.
 
-## Results with the default settings
+## Model tests
 
-| | Lake Urmia (2020 map) | Loktak Lake (2020 map) |
+Version 1.2.0 changed the training data after a comparison of model variants on both examples. Each variant was trained and then assessed as described above, against the JRC monthly reference, with 1,000 points per map class (Lake Urmia at 60 m, Loktak Lake at 30 m). 2005 is not a training year, so it tests whether the model carries over to other years and sensors. The 95 % confidence intervals are about ±0.003 to ±0.013.
+
+| Variant (map overall accuracy) | Urmia 2005 | Urmia 2020 | Loktak 2005 | Loktak 2020 |
+|---|---|---|---|---|
+| v1.1: trained on 2020 only, JRC permanent water vs. never water, 8 indices | 0.990 | 0.984 | 0.941 | 0.942 |
+| v1.1 with Landsat 5/7 harmonized to Landsat 8 (Roy et al., 2016) | 0.931 | 0.981 | 0.964 | 0.942 |
+| Four training years, season-matched labels in four strata, 8 indices | 0.994 | 0.991 | 0.967 | 0.959 |
+| **Same, plus the six reflectance bands (v1.2.0 default)** | **0.994** | **0.990** | **0.972** | **0.963** |
+| Same, plus HAND and slope from MERIT Hydro | 0.994 | 0.989 | 0.972 | 0.965 |
+
+- **Training data mattered most.** At Loktak Lake, v1.1 mapped 73.7 km² of water in 2020 where the area-adjusted estimate was 55.8 km² (quantity disagreement 0.042). With v1.2.0 the two agree (57.1 and 56.9 km², quantity disagreement 0.0005), and the user's accuracy for water in 2005 rose from 0.45 to 0.81. Sampling shores, seasonal water and dry lake beds as strata of their own (following Yue et al., 2023, who sampled seasonal water separately) gave the model the hard cases it had not seen before.
+- **Harmonization was not adopted.** It lowered the producer's accuracy for water in the Landsat 5/7 year 2005 from 0.998 to 0.80 at Lake Urmia and from 0.73 to 0.31 at Loktak Lake (there the overall accuracy rose only because water is a small share of the area). The regression adds a fixed offset (0.041 in NIR, 0.025 in SWIR1) that brightens dark water. Training on years from all sensors removed the sensor problem instead.
+- **Terrain inputs and a larger minimum leaf size** (`minLeafPopulation` 5) gave no consistent gain for these two lakes, which lie on flat ground. They may still help in mountains, where shadows are mistaken for water.
+- With the default script, the 2020 map of Lake Urmia has an overall accuracy of 0.991 ± 0.009 (250 points per class, 30 m), with quantity and allocation disagreement of 0.003 and 0.006. The hold-out check is now 0.983 instead of 0.993, because the hard cases are part of it.
+- The open-water area of Lake Urmia in summer 2025 drops from 687 km² (v1.1) to 520 km² (v1.2.0): the new model no longer counts the bright, very shallow margins over the salt crust as open water, in line with JRC.
+
+All numbers measure agreement with JRC Global Surface Water, not with ground truth.
+
+## Coverage in the examples
+
+| | Lake Urmia | Loktak Lake |
 |---|---|---|
-| Hold-out overall accuracy (2 km blocks) | 0.993 | 0.967 |
-| Map overall accuracy | 0.978 ± 0.013 | 0.941 ± 0.017 |
-| Water: user's / producer's accuracy | 0.960 ± 0.024 / 0.952 ± 0.045 | 0.744 ± 0.054 / 0.881 ± 0.091 |
-| Water: mapped / area-adjusted (km²) | 3,302.5 / 3,331.5 ± 176.3 | 71.4 / 60.3 ± 7.3 |
-| Quantity / allocation disagreement | 0.002 / 0.020 | 0.026 / 0.033 |
-| Share of the ROI in the sampling frame | 0.99 | 0.82 |
+| Share of the ROI in the 2020 sampling frame | 0.99 | 0.82 |
 | Cloud and cloud-shadow share of all observations, 2025 | 3.9 % | 83.3 % |
 | Series years flagged for coverage (of 9) | 0 | 7 |
 
-The hold-out check is higher than the map accuracy in both cases, which is expected. Loktak Lake is partly covered by floating vegetation (phumdis), and the map overestimates open water there. In the July–September monsoon, 67–89 % of the observations are cloud or cloud shadow. 1985 and 1995 have no Landsat scene in the season at all, 1990 has only scenes above the 60 % cloud limit, and 2000–2020 are 50–82 % observed, so only 2005 and 2025 pass the 95 % coverage check. Without the coverage columns, those years would look like years with little or no water.
+Loktak Lake is partly covered by floating vegetation (phumdis). In the July–September monsoon, 67–89 % of the observations are cloud or cloud shadow. 1985 and 1995 have no Landsat scene in the season at all, 1990 has only scenes above the 60 % cloud limit, and 2000–2020 are 50–82 % observed, so only 2005 and 2025 pass the 95 % coverage check. Without the coverage columns, those years would look like years with little or no water.
 
 To run the second example, set `roi: EXAMPLES.loktak`.
 
@@ -78,9 +93,9 @@ To run the second example, set `roi: EXAMPLES.loktak`.
 | `maxSceneCloud` | `60` | Scenes above this cloud cover (%) are skipped |
 | `useLandsat7` | `true` | Include Landsat 7 (gaps after 2003 are filled by the median where other sensors exist) |
 | `trainingSource` | `'auto'` | `'auto'` (JRC labels) or `'drawn'` (your `water` / `land` layers) |
-| `trainYear` | `2020` | Reference year for `'auto'` labels (1984–2021) |
-| `samplesPerClass` | `500` | Training points per class for `'auto'` |
-| `features` | 8 indices | Inputs to the classifier |
+| `trainYears` | `[1990, 2000, 2010, 2020]` | Label years for `'auto'` (1984–2021) |
+| `samplesPerClass` | `1000` | Water and land training points each, over all `trainYears` |
+| `features` | 6 bands + 8 indices | Inputs to the classifier |
 | `nTrees` | `100` | Number of trees |
 | `trainFraction` | `0.7` | Share of blocks used for training; the rest is the hold-out |
 | `blockSize` | `2000` | Block edge (m) for the training / hold-out split; `0` splits point by point |
@@ -104,7 +119,7 @@ To run the second example, set `roi: EXAMPLES.loktak`.
 - The model is trained once and applied to every year, so all years are classified the same way. The map accuracy is estimated for `assessment.year` only; other years use the same model and processing, but their accuracy is not measured.
 - `observed_km2` is the part of the ROI with at least one clear observation in the composite. A flagged year's `water_km2` covers only the observed part, so it is not comparable with the other years.
 - `cloud_pct` is the share of all observations of the ROI in the season that Landsat's QA band marks as cloud, dilated cloud or cloud shadow. It counts every scene of the season, also those skipped by `maxSceneCloud`, so it shows how cloudy the season was. It is empty when the season has no scene at all. `n_scenes` counts only the scenes used in the composite.
-- With `'auto'`, labels come from JRC permanent water and never-water pixels of `trainYear`. That makes a good general model, but your own samples are better for turbid, saline or vegetated water. Landsat does not see water under vegetation.
+- With `'auto'`, labels come from the JRC monthly history, so the map follows JRC's definition of open water. Your own samples are better for turbid, saline or vegetated water. Landsat does not see water under vegetation.
 - Large regions: raise `areaScale` or `tileScale` if you hit memory limits. The assessment sums run at 30 m.
 
 ## Data
@@ -117,16 +132,19 @@ To run the second example, set `roi: EXAMPLES.loktak`.
 - Olofsson, P., Foody, G. M., Herold, M., Stehman, S. V., Woodcock, C. E., & Wulder, M. A. (2014). Good practices for estimating area and assessing accuracy of land change. *Remote Sensing of Environment*, 148, 42–57. https://doi.org/10.1016/j.rse.2014.02.015
 - Pekel, J.-F., Cottam, A., Gorelick, N., & Belward, A. S. (2016). High-resolution mapping of global surface water and its long-term changes. *Nature*, 540, 418–422. https://doi.org/10.1038/nature20584
 - Pontius, R. G., & Millones, M. (2011). Death to Kappa: birth of quantity disagreement and allocation disagreement for accuracy assessment. *International Journal of Remote Sensing*, 32(15), 4407–4429. https://doi.org/10.1080/01431161.2011.552923
+- Roy, D. P., Kovalskyy, V., Zhang, H. K., Vermote, E. F., Yan, L., Kumar, S. S., & Egorov, A. (2016). Characterization of Landsat-7 to Landsat-8 reflective wavelength and normalized difference vegetation index continuity. *Remote Sensing of Environment*, 185, 57–70. https://doi.org/10.1016/j.rse.2015.12.024
 - Wadoux, A. M. J.-C., Heuvelink, G. B. M., de Bruin, S., & Brus, D. J. (2021). Spatial cross-validation is not the right way to evaluate map accuracy. *Ecological Modelling*, 457, 109692. https://doi.org/10.1016/j.ecolmodel.2021.109692
+- Yue, L., Li, B., Zhu, S., Yuan, Q., & Shen, H. (2023). A fully automatic and high-accuracy surface water mapping framework on Google Earth Engine using Landsat time-series. *International Journal of Digital Earth*. https://doi.org/10.1080/17538947.2023.2166606
 
 ## Changelog
 
+- **1.2.0** (2026-11-20): `'auto'` training labels from the JRC monthly history of the composite's months in four years (1990, 2000, 2010, 2020), sampled in four strata that include shores, seasonal water and dry lake beds; the six reflectance bands added to the inputs. Map accuracy rose in both examples and the water-area bias at Loktak Lake almost disappeared (see Model tests).
 - **1.1.0** (2026-11-18): area-adjusted map accuracy and area estimates with 95 % CIs (Olofsson et al., 2014); quantity and allocation disagreement (Pontius & Millones, 2011); spatially blocked hold-out; observed area, observed share, cloud percentage and a low-coverage flag in the area series; a second, small and cloudy example (Loktak Lake); assessment points exported for relabelling.
 - **1.0.0** (2026-10-25): first release.
 
 ## Cite this tool
 
-Abbasalizadehrezaei, P. (2026). *Wetland Water Mapping with Random Forest* (Version 1.1.0) [Software]. Zenodo. https://doi.org/10.5281/zenodo.23646350
+Abbasalizadehrezaei, P. (2026). *Wetland Water Mapping with Random Forest* (Version 1.2.0) [Software]. Zenodo. https://doi.org/10.5281/zenodo.23646350
 
 GitHub also offers a ready-made citation under **Cite this repository** (from [CITATION.cff](CITATION.cff)).
 
