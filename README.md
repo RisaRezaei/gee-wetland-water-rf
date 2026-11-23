@@ -5,23 +5,24 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23646350.svg)](https://doi.org/10.5281/zenodo.23646350)
 
-Map **open water in lakes and wetlands** from Landsat with a **Random Forest** classifier trained on six reflectance bands and eight spectral water indices. The script assesses the map with a **stratified random sample** and reports **area-adjusted accuracy and area with 95 % confidence intervals**, then applies the same model to other years to build a **water-area time series** back to 1984, with the observed area and cloud percentage of every year so that clouds are not mistaken for water loss.
+Map **open water in lakes and wetlands** from Landsat with a **Random Forest** classifier trained on six reflectance bands and eight spectral water indices. Every month of the season is classified on its own, and a pixel is water if it was water in at least half of the months in which it was observed, so the map also shows how often each pixel held water. The script assesses the map with a **stratified random sample** and reports **area-adjusted accuracy and area with 95 % confidence intervals**, then applies the same model to other years to build a **water-area time series** back to 1984, with the observed area and cloud percentage of every year so that clouds are not mistaken for water loss.
 
 ![Lake Urmia open water in 1995 and 2025 with the water-area series and accuracy](docs/preview.png)
 
-<sub>Example output for Lake Urmia with the default settings: classified open water in summer 1995 and 2025, the area series, and the hold-out accuracy.</sub>
+<sub>Example output for Lake Urmia (version 1.2.0 settings): classified open water in summer 1995 and 2025, the area series, and the hold-out accuracy.</sub>
 
 ## What the script does
 
-1. Builds a cloud-masked **seasonal median composite** from Landsat 5, 7, 8 and 9 Collection 2 surface reflectance.
+1. Builds a cloud-masked **median composite of each month of the season** from Landsat 5, 7, 8 and 9 Collection 2 surface reflectance (or one composite of the whole season with `mapping: 'seasonal'`, as in version 1.2.0).
 2. Uses the six reflectance bands (blue, green, red, NIR, SWIR1, SWIR2) and eight water and vegetation indices: NDVI, NDWI, MNDWI, AWEI<sub>nsh</sub>, AWEI<sub>sh</sub>, WRI, NWI and EWI.
 3. Gets **training samples** in one of two ways:
-   - `'auto'`: stratified samples labelled from the [JRC Global Surface Water](https://global-surface-water.appspot.com/) monthly history of the composite's months, in four training years (1990, 2000, 2010, 2020) so that the model sees Landsat 5, 7 and 8. Each year is sampled in four strata: stable water, other water (shores, seasonal water), land that has been water since 1984 (dry lake bed, shores) and other land, so the hard cases are in the training data. It runs anywhere with no drawing.
+   - `'auto'`: stratified samples labelled from the [JRC Global Surface Water](https://global-surface-water.appspot.com/) monthly history, in four training years (1990, 2000, 2010, 2020) so that the model sees Landsat 5, 7 and 8. Each month's composite is labelled with JRC's map of that same month. Each composite is sampled in four strata: stable water, other water (shores, seasonal water), land that has been water since 1984 (dry lake bed, shores) and other land, so the hard cases are in the training data. It runs anywhere with no drawing.
    - `'drawn'`: your own points or polygons, drawn as two layers named `water` and `land`.
-4. Splits the samples by **spatial blocks** and runs a **hold-out check** (confusion matrix, overall, producer's and user's accuracy, kappa).
-5. Charts **variable importance** for the 14 inputs.
-6. Assesses the **map** with a separate stratified random sample and reports area-weighted accuracy, an **area estimate per class**, and **quantity and allocation disagreement** (see below).
-7. Classifies the target year and, optionally, a list of years. Each year reports the **water area**, the **observed area**, the **observed share of the ROI** and the **cloud percentage** of the season; years below a coverage threshold are flagged.
+4. Classifies every monthly composite. A pixel is **water if it was water in at least half of its observed months**, the same rule the JRC reference uses. The map comes with the **water frequency** (share of the observed months that were water) and the **water probability** (mean share of the trees voting water), so seasonal water and uncertain shore pixels are visible.
+5. Splits the samples by **spatial blocks** and runs a **hold-out check** (confusion matrix, overall, producer's and user's accuracy, kappa).
+6. Charts **variable importance** for the 14 inputs.
+7. Assesses the **map** with a separate stratified random sample and reports area-weighted accuracy, an **area estimate per class**, and **quantity and allocation disagreement** (see below).
+8. Maps the target year and, optionally, a list of years. Each year reports the **water area**, the **observed area**, the **observed share of the ROI** and the **cloud percentage** of the season; years below a coverage threshold are flagged.
 
 ## Quick start
 
@@ -52,6 +53,27 @@ With JRC as the reference, the numbers measure **agreement with JRC Global Surfa
 This also works for years after 2021, which JRC does not cover.
 
 ## Model tests
+
+### Version 1.3.0: monthly maps and water frequency
+
+Up to version 1.2.0, each year was one median composite of the whole season. Large Landsat water products classify every observation instead and then count how often a pixel was water: JRC Global Surface Water builds monthly maps (Pekel et al., 2016), Water Observations from Space classifies every scene (Mueller et al., 2016), and the GLAD water dynamics maps classify all 3.4 million Landsat 5, 7 and 8 scenes from 1999 to 2018 (Pickens et al., 2020). A seasonal median can mix water and dry observations into a spectrum that is neither, and it hides how long a pixel held water.
+
+Version 1.3.0 classifies each month's composite and keeps a pixel as water if it was water in at least half of its observed months. This is the same rule as the JRC reference used for training and assessment, so the map and the reference now define open water in the same way. Each training composite is labelled with JRC's map of its own month instead of the season.
+
+Tested as below (1,000 points per map class, against the JRC monthly reference; 2005 is not a training year):
+
+| Map overall accuracy | Urmia 2005 | Urmia 2020 | Loktak 2005 | Loktak 2020 |
+|---|---|---|---|---|
+| v1.2.0, seasonal composite | 0.994 | 0.990 | 0.972 | 0.963 |
+| **v1.3.0, monthly maps + water frequency** | **0.996** | **0.990** | **0.983** | **0.963** |
+
+- The largest gain is where water changes within the season. At Loktak Lake in 2005, the producer's accuracy for water rose from 0.58 to 0.97 and the allocation disagreement fell from 0.014 to 0.004: the seasonal composite had missed 42 % of the water there.
+- At Lake Urmia, the differences are within the 95 % confidence intervals. The 2005 map improved slightly (quantity disagreement 0.005 → 0.003). In 2020 the overall accuracy is unchanged; the new map's water is more reliable (user's accuracy 0.988 → 0.996) but it misses a little more water (quantity disagreement 0.005 → 0.008).
+- With the default script, the 2020 map of Lake Urmia has an overall accuracy of 0.993 ± 0.009 (250 points per class, 30 m; version 1.2.0: 0.991), with quantity and allocation disagreement of 0.005 and 0.002.
+- The open-water area of Lake Urmia in summer 2025 is 421 km² (version 1.2.0: 520 km²). A pixel now has to be water in at least half of its observed months (two of three when all three months are clear); pixels with water in only one month still appear in the water-frequency band.
+- The water probability is the Random Forest's vote share. A month is water when at least half of the trees vote water, which is what the class output of version 1.2.0 did, so this adds an uncertainty layer without changing the rule.
+
+### Version 1.2.0: training data
 
 Version 1.2.0 changed the training data after a comparison of model variants on both examples. Each variant was trained and then assessed as described above, against the JRC monthly reference, with 1,000 points per map class (Lake Urmia at 60 m, Loktak Lake at 30 m). 2005 is not a training year, so it tests whether the model carries over to other years and sensors. The 95 % confidence intervals are about ±0.003 to ±0.013.
 
@@ -92,6 +114,7 @@ To run the second example, set `roi: EXAMPLES.loktak`.
 | `season` | `['07-01', '09-30']` | Month-day window of the composite (within one calendar year; the script stops with a message otherwise) |
 | `maxSceneCloud` | `60` | Scenes above this cloud cover (%) are skipped |
 | `useLandsat7` | `true` | Include Landsat 7 (gaps after 2003 are filled by the median where other sensors exist) |
+| `mapping` | `'monthly'` | `'monthly'`: classify each month and keep water seen in at least half of the observed months; `'seasonal'`: one composite of the whole season (version 1.2.0) |
 | `trainingSource` | `'auto'` | `'auto'` (JRC labels) or `'drawn'` (your `water` / `land` layers) |
 | `trainYears` | `[1990, 2000, 2010, 2020]` | Label years for `'auto'` (1984–2021) |
 | `samplesPerClass` | `1000` | Water and land training points each, over all `trainYears` |
@@ -108,7 +131,7 @@ To run the second example, set `roi: EXAMPLES.loktak`.
 
 ## Outputs
 
-- `wetland_water_rf_<year>.tif`: water map (1 = water, 0 = not water) at 30 m.
+- `wetland_water_rf_<year>.tif`: three bands at 30 m: water (1 = water, 0 = not water), water frequency (% of the observed months that were water) and water probability (mean % of trees voting water); 255 = never observed.
 - `wetland_water_rf_map_accuracy.csv`: per class (`land`, `water`): mapped and area-adjusted km² with 95 % CI, user's and producer's accuracy with 95 % CI, number of points; one `overall` row with overall accuracy and CI, quantity and allocation disagreement, sampling-frame area and share of the ROI.
 - `wetland_water_rf_assessment_points_<year>.csv`: `lon`, `lat`, `map`, `reference` for every assessment point.
 - `wetland_water_rf_holdout.csv`: hold-out overall accuracy, kappa, per-class accuracies, sample counts, block size and the importance of each index.
@@ -116,11 +139,13 @@ To run the second example, set `roi: EXAMPLES.loktak`.
 
 ## Notes
 
+- With `'monthly'`, a month with no clear scene is simply not counted, so a pixel needs only one clear month to be mapped. `water_frequency` is the share of the observed months, not of all months: 0.5 from two observed months is less certain than 0.5 from six.
 - The model is trained once and applied to every year, so all years are classified the same way. The map accuracy is estimated for `assessment.year` only; other years use the same model and processing, but their accuracy is not measured.
 - `observed_km2` is the part of the ROI with at least one clear observation in the composite. A flagged year's `water_km2` covers only the observed part, so it is not comparable with the other years.
 - `cloud_pct` is the share of all observations of the ROI in the season that Landsat's QA band marks as cloud, dilated cloud or cloud shadow. It counts every scene of the season, also those skipped by `maxSceneCloud`, so it shows how cloudy the season was. It is empty when the season has no scene at all. `n_scenes` counts only the scenes used in the composite.
 - With `'auto'`, labels come from the JRC monthly history, so the map follows JRC's definition of open water. Your own samples are better for turbid, saline or vegetated water. Landsat does not see water under vegetation.
 - Large regions: raise `areaScale` or `tileScale` if you hit memory limits. The assessment sums run at 30 m.
+- `'monthly'` classifies one composite per month instead of one per season (three times as many with the default July–September season), so the Console needs longer, above all for the area series. If it is slow, run the series from the **Tasks** tab (`wetland_water_rf_area_series.csv`), shorten `seriesYears`, or use `mapping: 'seasonal'` for a quick first look.
 
 ## Data
 
@@ -129,8 +154,10 @@ To run the second example, set `roi: EXAMPLES.loktak`.
 
 ## References
 
+- Mueller, N., Lewis, A., Roberts, D., Ring, S., Melrose, R., Sixsmith, J., Lymburner, L., McIntyre, A., Tan, P., Curnow, S., & Ip, A. (2016). Water observations from space: Mapping surface water from 25 years of Landsat imagery across Australia. *Remote Sensing of Environment*, 174, 341–352. https://doi.org/10.1016/j.rse.2015.11.003
 - Olofsson, P., Foody, G. M., Herold, M., Stehman, S. V., Woodcock, C. E., & Wulder, M. A. (2014). Good practices for estimating area and assessing accuracy of land change. *Remote Sensing of Environment*, 148, 42–57. https://doi.org/10.1016/j.rse.2014.02.015
 - Pekel, J.-F., Cottam, A., Gorelick, N., & Belward, A. S. (2016). High-resolution mapping of global surface water and its long-term changes. *Nature*, 540, 418–422. https://doi.org/10.1038/nature20584
+- Pickens, A. H., Hansen, M. C., Hancher, M., Stehman, S. V., Tyukavina, A., Potapov, P., Marroquin, B., & Sherani, Z. (2020). Mapping and sampling to characterize global inland water dynamics from 1999 to 2018 with full Landsat time-series. *Remote Sensing of Environment*, 243, 111792. https://doi.org/10.1016/j.rse.2020.111792
 - Pontius, R. G., & Millones, M. (2011). Death to Kappa: birth of quantity disagreement and allocation disagreement for accuracy assessment. *International Journal of Remote Sensing*, 32(15), 4407–4429. https://doi.org/10.1080/01431161.2011.552923
 - Roy, D. P., Kovalskyy, V., Zhang, H. K., Vermote, E. F., Yan, L., Kumar, S. S., & Egorov, A. (2016). Characterization of Landsat-7 to Landsat-8 reflective wavelength and normalized difference vegetation index continuity. *Remote Sensing of Environment*, 185, 57–70. https://doi.org/10.1016/j.rse.2015.12.024
 - Wadoux, A. M. J.-C., Heuvelink, G. B. M., de Bruin, S., & Brus, D. J. (2021). Spatial cross-validation is not the right way to evaluate map accuracy. *Ecological Modelling*, 457, 109692. https://doi.org/10.1016/j.ecolmodel.2021.109692
@@ -138,13 +165,14 @@ To run the second example, set `roi: EXAMPLES.loktak`.
 
 ## Changelog
 
+- **1.3.0** (2026-11-23): each month of the season is classified on its own and a pixel is water if it was water in at least half of its observed months, the same rule as the JRC reference (`mapping: 'monthly'`, new default; `'seasonal'` keeps version 1.2.0); `'auto'` training composites labelled with JRC's map of the same month; water frequency and water probability added to the map and the GeoTIFF. Map accuracy rose or stayed the same in all four tests, most at Loktak Lake in 2005 (see Model tests).
 - **1.2.0** (2026-11-20): `'auto'` training labels from the JRC monthly history of the composite's months in four years (1990, 2000, 2010, 2020), sampled in four strata that include shores, seasonal water and dry lake beds; the six reflectance bands added to the inputs. Map accuracy rose in both examples and the water-area bias at Loktak Lake almost disappeared (see Model tests).
 - **1.1.0** (2026-11-18): area-adjusted map accuracy and area estimates with 95 % CIs (Olofsson et al., 2014); quantity and allocation disagreement (Pontius & Millones, 2011); spatially blocked hold-out; observed area, observed share, cloud percentage and a low-coverage flag in the area series; a second, small and cloudy example (Loktak Lake); assessment points exported for relabelling.
 - **1.0.0** (2026-10-25): first release.
 
 ## Cite this tool
 
-Abbasalizadehrezaei, P. (2026). *Wetland Water Mapping with Random Forest* (Version 1.2.0) [Software]. Zenodo. https://doi.org/10.5281/zenodo.23646350
+Abbasalizadehrezaei, P. (2026). *Wetland Water Mapping with Random Forest* (Version 1.3.0) [Software]. Zenodo. https://doi.org/10.5281/zenodo.23646350
 
 GitHub also offers a ready-made citation under **Cite this repository** (from [CITATION.cff](CITATION.cff)).
 
