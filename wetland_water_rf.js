@@ -1,16 +1,25 @@
 /**
  * Wetland Water Mapping with Random Forest (Landsat 5/7/8/9)
  * ---------------------------------------------------------
- * Maps open water in a lake or wetland from a seasonal Landsat Collection 2
- * composite with a Random Forest trained on six reflectance bands and eight
- * spectral water indices, and applies the same model to other years to build
- * a water-area series.
+ * Maps open water in a lake or wetland from Landsat Collection 2 with a
+ * Random Forest trained on six reflectance bands and eight spectral water
+ * indices, and applies the same model to other years to build a water-area
+ * series.
+ *
+ * Mapping
+ *   'monthly'  : (default) every month of the season is composited and
+ *                classified on its own. A pixel is water if it was water in at
+ *                least half of the months in which it was observed, the same
+ *                rule as the JRC reference. The map also gives the water
+ *                frequency of the season and the mean water probability.
+ *   'seasonal' : one median composite of the whole season (version 1.2.0).
  *
  * Training data
  *   'auto'  : samples are labelled from the JRC Global Surface Water monthly
- *             history of the composite's months in CONFIG.trainYears, so the
- *             model sees Landsat 5, 7 and 8 and the hard cases (shores,
- *             seasonal water, dry lake beds). It runs anywhere without drawing.
+ *             history in CONFIG.trainYears, each month's composite with the
+ *             label of that same month, so the model sees Landsat 5, 7 and 8
+ *             and the hard cases (shores, seasonal water, dry lake beds). It
+ *             runs anywhere without drawing.
  *   'drawn' : draw two point/polygon layers named "water" and "land" with the
  *             geometry tools. Your own samples usually give the best map.
  *
@@ -38,7 +47,7 @@
  *   then start the exports from the Tasks tab.
  *
  * Author: Parisa Abbasalizadehrezaei · https://risarezaei.github.io
- * License: MIT · Version 1.2.0
+ * License: MIT · Version 1.3.0
  */
 
 // =============================== CONFIG ===================================
@@ -58,6 +67,7 @@ var CONFIG = {
   season: ['07-01', '09-30'],    // month-day window of the composite (one calendar year)
   maxSceneCloud: 60,             // skip scenes cloudier than this (%)
   useLandsat7: true,             // L7 has SLC-off gaps after May 2003
+  mapping: 'monthly',            // 'monthly' (water frequency) or 'seasonal' (v1.2.0)
 
   trainingSource: 'auto',        // 'auto' or 'drawn'
   trainYears: [1990, 2000, 2010, 2020], // label years for 'auto' (1984-2021)
@@ -98,6 +108,9 @@ if (CONFIG.trainingSource === 'auto' &&
     CONFIG.trainYears.some(function (y) { return y < 1984 || y > 2021; })) {
   throw new Error('CONFIG.trainYears must lie in 1984-2021 (the JRC monthly history).');
 }
+if (CONFIG.mapping !== 'monthly' && CONFIG.mapping !== 'seasonal') {
+  throw new Error("CONFIG.mapping must be 'monthly' or 'seasonal'.");
+}
 
 var roi = CONFIG.roi;
 var NAMES = ['blue', 'green', 'red', 'nir', 'swir1', 'swir2'];
@@ -129,12 +142,10 @@ function cloudFlags(img) {
   return cloudy.rename('cloudy').addBands(valid.rename('valid')).toUint16();
 }
 
-// Landsat scenes of the season over the ROI. The composite uses the scenes
-// below maxSceneCloud; with cloudsOnly = true every scene of the season is
-// returned as cloud flags, for the cloud statistics.
-function landsat(year, cloudsOnly) {
-  var start = ee.Date(year + '-' + CONFIG.season[0]);
-  var end = ee.Date(year + '-' + CONFIG.season[1]).advance(1, 'day');
+// Landsat scenes of a date range over the ROI. Composites use the scenes
+// below maxSceneCloud; with cloudsOnly = true every scene is returned as
+// cloud flags, for the cloud statistics.
+function landsatRange(start, end, cloudsOnly) {
   function get(id, bands) {
     var col = ee.ImageCollection(id).filterBounds(roi).filterDate(start, end);
     if (cloudsOnly) return col.map(cloudFlags);
@@ -146,6 +157,30 @@ function landsat(year, cloudsOnly) {
     .merge(get('LANDSAT/LC09/C02/T1_L2', L89));
   if (CONFIG.useLandsat7) col = col.merge(get('LANDSAT/LE07/C02/T1_L2', L57));
   return col;
+}
+
+// Scenes of the whole season.
+function landsat(year, cloudsOnly) {
+  return landsatRange(ee.Date(year + '-' + CONFIG.season[0]),
+    ee.Date(year + '-' + CONFIG.season[1]).advance(1, 'day'), cloudsOnly);
+}
+
+// Months of the season. monthWindow gives the dates of one month, with the
+// first and last month cut to the season window.
+var M0 = parseInt(CONFIG.season[0].slice(0, 2), 10);
+var M1 = parseInt(CONFIG.season[1].slice(0, 2), 10);
+var MONTHS = [];
+for (var mo = M0; mo <= M1; mo++) MONTHS.push(mo);
+
+function pad2(n) { return (n < 10 ? '0' : '') + n; }
+
+function monthWindow(year, m) {
+  var first = year + '-' + pad2(m) + '-01';
+  var seasonStart = year + '-' + CONFIG.season[0];
+  var start = ee.Date(first > seasonStart ? first : seasonStart);
+  var next = ee.Date(first).advance(1, 'month');
+  var seasonEnd = ee.Date(year + '-' + CONFIG.season[1]).advance(1, 'day');
+  return [start, ee.Date(next.millis().min(seasonEnd.millis()))];
 }
 
 // ---- Spectral water indices ---------------------------------------------
@@ -172,15 +207,38 @@ function median(col) {
   return ee.Image(ee.Algorithms.If(col.size().gt(0), col.median(), empty));
 }
 
+// Median composite of the whole season (for display and 'seasonal' mapping).
 function composite(year) {
   return addIndices(median(landsat(year)).clip(roi));
 }
 
+// Median composite of one month of the season.
+function monthComposite(year, m) {
+  var w = monthWindow(year, m);
+  return addIndices(median(landsatRange(w[0], w[1])).clip(roi));
+}
+
+// The composites the model is trained on and applied to: one per month, or
+// the whole season.
+function composites(year) {
+  if (CONFIG.mapping === 'seasonal') return [composite(year)];
+  return MONTHS.map(function (m) { return monthComposite(year, m); });
+}
+
 // ---- Training samples ----------------------------------------------------
-// Labels from the JRC monthly water history for the months of the composite:
+// JRC monthly label of one month: 1 water, 0 not water, masked if JRC did
+// not observe the pixel.
+function jrcMonth(year, m) {
+  var w = ee.Image(ee.ImageCollection('JRC/GSW1_4/MonthlyHistory')
+    .filter(ee.Filter.eq('year', year)).filter(ee.Filter.eq('month', m)).first())
+    .select('water');
+  return w.eq(2).rename('reference').toByte().updateMask(w.gt(0));
+}
+
+// Labels from the JRC monthly water history for the months of the season:
 // water if the pixel was water in at least half of the months in which JRC
 // observed it. Pixels JRC never observed in those months stay unlabelled.
-// Used for the 'auto' training samples and as the reference of the map
+// Used for the 'seasonal' training samples and as the reference of the map
 // accuracy assessment.
 function jrcReference(year) {
   var m0 = parseInt(CONFIG.season[0].slice(0, 2), 10);
@@ -201,32 +259,44 @@ if (CONFIG.trainingSource === 'drawn') {
   var asFc = function (x, cls) {
     return ee.FeatureCollection(x).map(function (f) { return f.set('class', cls); });
   };
-  samples = composite(CONFIG.year).select(CONFIG.features).sampleRegions({
-    collection: asFc(water, 1).merge(asFc(land, 0)),
-    properties: ['class'], scale: 30, geometries: true, tileScale: 4
-  });
+  // The drawn labels are taken to hold for every composite of CONFIG.year.
+  var drawn = asFc(water, 1).merge(asFc(land, 0));
+  samples = ee.FeatureCollection(composites(CONFIG.year).map(function (img) {
+    return img.select(CONFIG.features).sampleRegions({
+      collection: drawn, properties: ['class'], scale: 30, geometries: true, tileScale: 4
+    });
+  })).flatten();
 } else {
-  // Four strata per training year, so that the hard cases are sampled too:
+  // Each training composite gets the JRC label of its own period: the month
+  // ('monthly') or the season ('seasonal'). Four strata per composite, so that
+  // the hard cases are sampled too:
   // 1 = water that is almost always water (JRC occurrence >= 90 %),
   // 2 = other water (shores, seasonal water),
   // 3 = land that has been water at some time since 1984 (dry lake bed, shores),
   // 4 = other land. Strata 1 and 2 are labelled water, 3 and 4 land.
   var occurrence = ee.Image('JRC/GSW1_4/GlobalSurfaceWater').select('occurrence').unmask(0);
-  var perStratum = Math.round(CONFIG.samplesPerClass / 2 / CONFIG.trainYears.length);
-  samples = ee.FeatureCollection(CONFIG.trainYears.map(function (y) {
-    var ref = jrcReference(y);
-    var stratum = ee.Image(4)
-      .where(ref.eq(0).and(occurrence.gt(0)), 3)
-      .where(ref.eq(1).and(occurrence.lt(90)), 2)
-      .where(ref.eq(1).and(occurrence.gte(90)), 1)
-      .updateMask(ref.mask()).rename('stratum').toInt();
-    return composite(y).select(CONFIG.features).addBands(stratum).stratifiedSample({
-      numPoints: perStratum, classBand: 'stratum', region: roi, scale: 30,
-      seed: CONFIG.seed + y, geometries: true, tileScale: 4
-    }).map(function (f) {
-      return f.set({'class': ee.Number(f.get('stratum')).lte(2), year: y});
+  var periods = CONFIG.mapping === 'seasonal' ? [0] : MONTHS;
+  var perStratum = Math.max(1, Math.round(
+    CONFIG.samplesPerClass / 2 / CONFIG.trainYears.length / periods.length));
+  var parts = [];
+  CONFIG.trainYears.forEach(function (y) {
+    periods.forEach(function (m) {
+      var img = m ? monthComposite(y, m) : composite(y);
+      var ref = m ? jrcMonth(y, m) : jrcReference(y);
+      var stratum = ee.Image(4)
+        .where(ref.eq(0).and(occurrence.gt(0)), 3)
+        .where(ref.eq(1).and(occurrence.lt(90)), 2)
+        .where(ref.eq(1).and(occurrence.gte(90)), 1)
+        .updateMask(ref.mask()).rename('stratum').toInt();
+      parts.push(img.select(CONFIG.features).addBands(stratum).stratifiedSample({
+        numPoints: perStratum, classBand: 'stratum', region: roi, scale: 30,
+        seed: m ? CONFIG.seed + y * 13 + m : CONFIG.seed + y, geometries: true, tileScale: 4
+      }).map(function (f) {
+        return f.set({'class': ee.Number(f.get('stratum')).lte(2), year: y, month: m});
+      }));
     });
-  })).flatten();
+  });
+  samples = ee.FeatureCollection(parts).flatten();
 }
 
 // ---- Train / hold-out split by spatial blocks ----------------------------
@@ -243,16 +313,37 @@ if (CONFIG.blockSize > 0) {
 var training = samples.filter(ee.Filter.lt('rand', CONFIG.trainFraction));
 var holdout = samples.filter(ee.Filter.gte('rand', CONFIG.trainFraction));
 
+// The forest returns the share of trees that vote water (0-1); a composite
+// is water where at least half of the trees vote water.
 var classifier = ee.Classifier.smileRandomForest({
   numberOfTrees: CONFIG.nTrees, seed: CONFIG.seed
-}).train({features: training, classProperty: 'class', inputProperties: CONFIG.features});
+}).setOutputMode('PROBABILITY')
+  .train({features: training, classProperty: 'class', inputProperties: CONFIG.features});
 
-function classify(img) {
-  return img.select(CONFIG.features).classify(classifier).rename('water').toByte();
+// Water map of one year. Bands:
+//   water             1 = water, 0 = not water (masked where never observed)
+//   water_frequency   share of the observed months that were water
+//   water_probability mean share of trees voting water over those months
+// A pixel is water if it was water in at least half of its observed months,
+// the same rule as the JRC reference (jrcReference). With 'seasonal' there
+// is one composite, so frequency is 0 or 1.
+function classifyYear(year) {
+  var col = ee.ImageCollection(composites(year).map(function (img) {
+    var p = img.select(CONFIG.features).classify(classifier).rename('p');
+    return p.gte(0.5).rename('w').addBands(p);
+  }));
+  var observed = col.select('w').count();
+  var waterMonths = col.select('w').sum();
+  return waterMonths.multiply(2).gte(observed).rename('water').toByte()
+    .addBands(waterMonths.divide(observed).rename('water_frequency'))
+    .addBands(col.select('p').mean().rename('water_probability'))
+    .updateMask(observed.gt(0));
 }
 
 // ---- 1) Hold-out check ---------------------------------------------------
-var cm = holdout.classify(classifier).errorMatrix('class', 'classification', [0, 1]);
+var cm = holdout.classify(classifier).map(function (f) {
+  return f.set('predicted', ee.Number(f.get('classification')).gte(0.5));
+}).errorMatrix('class', 'predicted', [0, 1]);
 print('1) HOLD-OUT CHECK: training-type samples, split by ' +
   (CONFIG.blockSize > 0 ? CONFIG.blockSize + ' m blocks' : 'point') +
   '. Describes the model, not the map.');
@@ -317,8 +408,8 @@ function cloudPct(year) {
 
 // ---- Classification of the target year ----------------------------------
 var image = composite(CONFIG.year);
-var classified = classify(image);
-var target = areaStats(classified);
+var classified = classifyYear(CONFIG.year);
+var target = areaStats(classified.select('water'));
 print('Water area ' + CONFIG.year + ' (km²)', target.get('water_km2'));
 print('Share of the ROI observed in ' + CONFIG.year, target.get('observed_frac'));
 print('Cloud and cloud-shadow share of all observations in ' + CONFIG.year + ' (%)',
@@ -328,7 +419,7 @@ print('Cloud and cloud-shadow share of all observations in ' + CONFIG.year + ' (
 var ASSESS = CONFIG.assessment;
 var useJrc = !ASSESS.referencePoints && ASSESS.year <= 2021;
 var hasReference = useJrc || !!ASSESS.referencePoints;
-var assessMap = classify(composite(ASSESS.year)).rename('map');
+var assessMap = classifyYear(ASSESS.year).select(['water'], ['map']);
 
 var reference = useJrc ? jrcReference(ASSESS.year) : null;
 var strata = useJrc ? assessMap.updateMask(reference.mask()) : assessMap;
@@ -452,23 +543,31 @@ if (hasReference) {
 // ---- Map -----------------------------------------------------------------
 Map.centerObject(roi);
 Map.addLayer(image, {bands: ['swir1', 'nir', 'green'], min: 0, max: 0.35}, 'Composite (SWIR1-NIR-G)');
-Map.addLayer(classified.selfMask(), {palette: ['1e88e5']}, 'Water ' + CONFIG.year);
+Map.addLayer(classified.select('water_probability'),
+  {min: 0, max: 1, palette: ['ffffff', 'b3e5fc', '1e88e5', '0d47a1']},
+  'Water probability ' + CONFIG.year, false);
+if (CONFIG.mapping === 'monthly') {
+  Map.addLayer(classified.select('water_frequency').updateMask(classified.select('water_frequency').gt(0)),
+    {min: 0, max: 1, palette: ['ffe082', '4dd0e1', '1565c0']},
+    'Water frequency ' + CONFIG.year + ' (share of observed months)', false);
+}
+Map.addLayer(classified.select('water').selfMask(), {palette: ['1e88e5']}, 'Water ' + CONFIG.year);
 Map.addLayer(samples.filter(ee.Filter.eq('class', 1)), {color: '00e5ff'}, 'Water samples', false);
 Map.addLayer(samples.filter(ee.Filter.eq('class', 0)), {color: 'ffb300'}, 'Land samples', false);
 Map.addLayer(points, {color: 'ff1744'}, 'Assessment points ' + ASSESS.year, false);
 
 // ---- Water-area time series with coverage --------------------------------
 var series = ee.FeatureCollection(CONFIG.seriesYears.map(function (y) {
-  var col = landsat(y);
-  var stats = areaStats(classify(addIndices(median(col).clip(roi))));
-  return ee.Feature(null, stats).set({year: y, n_scenes: col.size(), cloud_pct: cloudPct(y)});
+  var stats = areaStats(classifyYear(y).select('water'));
+  return ee.Feature(null, stats).set({year: y, n_scenes: landsat(y).size(), cloud_pct: cloudPct(y)});
 }));
 
 if (CONFIG.seriesYears.length) {
   var pct = Math.round(CONFIG.minObservedFraction * 100);
   print(ui.Chart.feature.byFeature(series.filter(ee.Filter.eq('low_coverage', 0)),
     'year', ['water_km2']).setChartType('LineChart').setOptions({
-      title: 'Open-water area (' + CONFIG.season.join(' to ') + ' composites, years with ≥ ' +
+      title: 'Open-water area (' + CONFIG.season.join(' to ') + ', ' + CONFIG.mapping +
+        ' mapping, years with ≥ ' +
         pct + ' % of the ROI observed)',
       hAxis: {title: 'Year', format: '####'}, vAxis: {title: 'km²'},
       pointSize: 5, lineWidth: 2, colors: ['1e88e5'], legend: {position: 'none'}
@@ -482,8 +581,13 @@ if (CONFIG.seriesYears.length) {
 
 // ---- Exports -------------------------------------------------------------
 if (CONFIG.exportMap) {
+  // Band 1: water (1) / not water (0); band 2: water frequency and band 3:
+  // water probability, both in % (0-100). 255 = never observed.
   Export.image.toDrive({
-    image: classified, description: CONFIG.filePrefix + '_' + CONFIG.year,
+    image: classified.select('water').addBands(
+      classified.select(['water_frequency', 'water_probability']).multiply(100).round())
+      .unmask(255).toByte(),
+    description: CONFIG.filePrefix + '_' + CONFIG.year,
     folder: CONFIG.driveFolder, region: roi, scale: 30, maxPixels: 1e13
   });
 }
